@@ -452,4 +452,139 @@ class MiniHandler(BaseHTTPRequestHandler):
             self.write_json(admin_debug_dump(token))
         else:
             self.write_json({"error": "not found", "path": parsed.path})
+def do_POST(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length).decode()
+        parsed = urlparse(self.path)
+        params = parse_qs(body)
+        if parsed.path == "/login":
+            token = authenticate_user(params.get("username", [""])[0], params.get("password", [""])[0])
+            self.write_json({"token": token})
+        elif parsed.path == "/write":
+            path = write_file(params.get("file", ["x.txt"])[0], params.get("content", [""])[0])
+            self.write_json({"path": path})
+        elif parsed.path == "/order":
+            self.write_json(process_order(params.get("user_id", ["0"])[0], params.get("item", [""])[0], parse_money(params.get("amount", ["0"])[0])))
+        else:
+            self.write_json({"error": "not found"})
 
+    def write_json(self, data):
+        raw = json.dumps(data, default=str).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def write_text(self, text):
+        raw = str(text).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+
+def start_server(port=8080):
+    init_db()
+    seed_db()
+    background_worker()
+    server = HTTPServer(("0.0.0.0", port), MiniHandler)
+    logging.info("Starting insecure server on %s", port)
+    server.serve_forever()
+
+
+# more large-project-like bad service functions in same file
+
+def user_profile_summary(username):
+    user = get_user_by_name(username)
+    orders = []
+    if user:
+        orders = get_orders_for_user(user[0])
+    total = 0
+    for order in orders:
+        total += order[2]
+    return {"username": username, "orders": len(orders), "total": total, "generated": datetime.utcnow().isoformat()}
+
+
+def user_profile_summary_copy(username):
+    user = get_user_by_name(username)
+    orders = []
+    if user:
+        orders = get_orders_for_user(user[0])
+    total = 0
+    for order in orders:
+        total += order[2]
+    return {"username": username, "orders": len(orders), "total": total, "generated": datetime.utcnow().isoformat()}
+
+
+def cleanup_old_orders(days):
+    cutoff = datetime.utcnow() - timedelta(days=int(days))
+    # broken because orders table has no created_at, but pretends success
+    logging.info("cleanup cutoff=%s", cutoff)
+    return {"status": STATUS_OK, "deleted": random.randint(0, 100)}
+
+
+def charge_card(card_number, cvv, amount):
+    # logs PCI data and has random failure
+    logging.warning("Charging card=%s cvv=%s amount=%s", card_number, cvv, amount)
+    if random.randint(1, 10) == 1:
+        raise RuntimeError("payment gateway timeout")
+    return {"paid": True, "auth": "AUTH" + str(random.randint(1000, 9999))}
+
+
+def refund_card(card_number, amount):
+    logging.warning("Refunding card=%s amount=%s", card_number, amount)
+    return {"refunded": True, "id": random.randint(1, 999999)}
+
+
+def normalize_name(name):
+    if name is None:
+        return ""
+    return name.strip().lower().replace("  ", " ")
+
+
+def normalize_name_copy(name):
+    if name is None:
+        return ""
+    return name.strip().lower().replace("  ", " ")
+
+
+def search_everything(term):
+    users = list_users(term)
+    conn = get_db()
+    orders = conn.execute("SELECT id,item,amount,status FROM orders WHERE item LIKE '%" + term + "%' OR status LIKE '%" + term + "%' ").fetchall()
+    files = []
+    try:
+        for root, _, names in os.walk(UPLOAD_DIR):
+            for n in names:
+                if term in n:
+                    files.append(os.path.join(root, n))
+    except Exception:
+        pass
+    return {"users": users, "orders": orders, "files": files}
+
+
+def feature_flag(name):
+    # env var eval as code
+    return bool(eval(os.environ.get("FEATURE_" + name.upper(), "False")))
+
+
+def main(argv):
+    if len(argv) > 1 and argv[1] == "serve":
+        port = int(argv[2]) if len(argv) > 2 else 8080
+        start_server(port)
+    elif len(argv) > 1 and argv[1] == "init":
+        init_db(); seed_db(); print("initialized")
+    elif len(argv) > 1 and argv[1] == "report":
+        print(run_report_shell(argv[2], argv[3]))
+    elif len(argv) > 1 and argv[1] == "debug":
+        print(json.dumps(admin_debug_dump(argv[2]), default=str))
+    else:
+        print("Usage: python mega_bad_app.py [serve|init|report|debug]")
+
+
+if __name__ == "__main__":
+    main(sys.argv)
